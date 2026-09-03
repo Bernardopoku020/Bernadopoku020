@@ -5,7 +5,6 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "postinstall": "unzip -o mister-gentle-app.zip >/dev/null",
     "test": "echo \"No tests specified\""
   },
   "keywords": [],
