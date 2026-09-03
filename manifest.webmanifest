@@ -1,0 +1,19 @@
+{
+  "name": "Mister Gentle Fast Food",
+  "short_name": "Mister Gentle",
+  "description": "Order fresh meals, pizza and chicken from Mister Gentle.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f3ec",
+  "theme_color": "#171512",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/images/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
