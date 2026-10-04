@@ -22,16 +22,23 @@ async function issueCode(customerId, channel) {
     db.prepare("INSERT INTO verification_codes (customer_id, channel, code_hash, expires_at) VALUES (?, ?, ?, datetime('now', '+10 minutes'))").run(customerId, channel, hash);
     let delivery = { sent: false, reason: "customer-not-found" };
     if (customer) {
-        delivery = await sendCodeMessage({
-            channel: deliveryChannel,
+        const deliver = selectedChannel => sendCodeMessage({
+            channel: selectedChannel,
             email: customer.email,
             phone: customer.phone,
             code,
             purpose: channel === "reset" ? "reset" : "verification"
         }).catch(error => {
-            console.error("Code delivery failed:", error);
+            console.error("Code delivery failed:", error.message);
             return { sent: false, reason: "provider-error" };
         });
+
+        if (channel === "reset") {
+            if (customer.email) delivery = await deliver("email");
+            if (!delivery.sent && customer.phone) delivery = await deliver("phone");
+        } else {
+            delivery = await deliver(deliveryChannel);
+        }
     }
 
     return { sent: Boolean(delivery && delivery.sent), channel: deliveryChannel, reason: delivery && delivery.reason };
@@ -57,12 +64,12 @@ router.post("/register", async (req, res) => {
         const phoneDelivery = await issueCode(customer.id, "phone");
         const emailDelivery = normalizedEmail ? await issueCode(customer.id, "email") : null;
         req.session.pendingCustomer = { id: customer.id };
-        const deliverySucceeded = phoneDelivery.sent && (!emailDelivery || emailDelivery.sent);
+        const deliverySucceeded = phoneDelivery.sent || Boolean(emailDelivery && emailDelivery.sent);
         res.status(201).json({
             success: true,
             verificationRequired: true,
             message: deliverySucceeded
-                ? "We sent a 6-digit code to your phone and email. Enter it to continue."
+                ? "We sent a 6-digit code to your available phone or email contact. Enter it to continue."
                 : "Your account was created, but a verification message could not be delivered. Configure a valid email or SMS provider, then log in to request a new code."
         });
     } catch (error) {
@@ -77,18 +84,18 @@ router.post("/login", async (req, res) => {
     try {
         const customer = db.prepare("SELECT * FROM customers WHERE email = ? OR phone = ?").get(identifier.trim().toLowerCase(), identifier.trim());
         if (!customer || !(await bcrypt.compare(password, customer.password))) return res.status(401).json({ success: false, message: "Those login details are not correct." });
-        if (!customer.email_verified || !customer.phone_verified) {
+        if (!customer.email_verified && !customer.phone_verified) {
             const phoneDelivery = await issueCode(customer.id, "phone");
             const emailDelivery = customer.email ? await issueCode(customer.id, "email") : null;
             req.session.pendingCustomer = { id: customer.id };
             delete req.session.customer;
-            const deliverySucceeded = phoneDelivery.sent && (!emailDelivery || emailDelivery.sent);
+            const deliverySucceeded = phoneDelivery.sent || Boolean(emailDelivery && emailDelivery.sent);
             return res.status(200).json({
                 success: true,
                 verificationRequired: true,
                 user: publicCustomer(customer),
                 message: deliverySucceeded
-                    ? "We sent a 6-digit code to your phone and email. Please verify to continue."
+                    ? "We sent a 6-digit code to your available phone or email contact. Please verify to continue."
                     : "A verification message could not be delivered. Configure a valid email or SMS provider and try logging in again."
             });
         }
@@ -130,7 +137,7 @@ router.post("/verify", (req, res) => {
     db.prepare(`UPDATE customers SET ${channel}_verified = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(customerId);
     db.prepare("DELETE FROM verification_codes WHERE id = ?").run(record.id);
     const customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId);
-    if (customer.phone_verified && (!customer.email || customer.email_verified)) { req.session.customer = publicCustomer(customer); delete req.session.pendingCustomer; }
+    if (customer.phone_verified || customer.email_verified) { req.session.customer = publicCustomer(customer); delete req.session.pendingCustomer; }
     res.json({ success: true, verified: Boolean(req.session.customer), user: req.session.customer || null });
 });
 
