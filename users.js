@@ -59,19 +59,11 @@ router.post("/register", async (req, res) => {
             return res.status(409).json({ success: false, message: "An account with that phone or email already exists." });
         }
         const hash = await bcrypt.hash(password, 12);
-        const result = db.prepare("INSERT INTO customers (first_name, last_name, email, phone, password, email_verified, phone_verified) VALUES (?, ?, ?, ?, ?, 0, 0)").run(first_name.trim(), last_name.trim(), normalizedEmail, phone.trim(), hash);
+        const result = db.prepare("INSERT INTO customers (first_name, last_name, email, phone, password, email_verified, phone_verified) VALUES (?, ?, ?, ?, ?, 1, 1)").run(first_name.trim(), last_name.trim(), normalizedEmail, phone.trim(), hash);
         const customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(result.lastInsertRowid);
-        const phoneDelivery = await issueCode(customer.id, "phone");
-        const emailDelivery = normalizedEmail ? await issueCode(customer.id, "email") : null;
-        req.session.pendingCustomer = { id: customer.id };
-        const deliverySucceeded = phoneDelivery.sent || Boolean(emailDelivery && emailDelivery.sent);
-        res.status(201).json({
-            success: true,
-            verificationRequired: true,
-            message: deliverySucceeded
-                ? "We sent a 6-digit code to your available phone or email contact. Enter it to continue."
-                : "Your account was created, but a verification message could not be delivered. Configure a valid email or SMS provider, then log in to request a new code."
-        });
+        req.session.customer = publicCustomer(customer);
+        delete req.session.pendingCustomer;
+        res.status(201).json({ success: true, user: req.session.customer, message: "Your account is ready." });
     } catch (error) {
         console.error("Customer registration error:", error);
         res.status(500).json({ success: false, message: "Could not create your account." });
@@ -84,21 +76,7 @@ router.post("/login", async (req, res) => {
     try {
         const customer = db.prepare("SELECT * FROM customers WHERE email = ? OR phone = ?").get(identifier.trim().toLowerCase(), identifier.trim());
         if (!customer || !(await bcrypt.compare(password, customer.password))) return res.status(401).json({ success: false, message: "Those login details are not correct." });
-        if (!customer.email_verified && !customer.phone_verified) {
-            const phoneDelivery = await issueCode(customer.id, "phone");
-            const emailDelivery = customer.email ? await issueCode(customer.id, "email") : null;
-            req.session.pendingCustomer = { id: customer.id };
-            delete req.session.customer;
-            const deliverySucceeded = phoneDelivery.sent || Boolean(emailDelivery && emailDelivery.sent);
-            return res.status(200).json({
-                success: true,
-                verificationRequired: true,
-                user: publicCustomer(customer),
-                message: deliverySucceeded
-                    ? "We sent a 6-digit code to your available phone or email contact. Please verify to continue."
-                    : "A verification message could not be delivered. Configure a valid email or SMS provider and try logging in again."
-            });
-        }
+        db.prepare("UPDATE customers SET email_verified = 1, phone_verified = 1 WHERE id = ?").run(customer.id);
         delete req.session.pendingCustomer;
         req.session.customer = publicCustomer(customer);
         res.json({ success: true, user: req.session.customer });
@@ -128,17 +106,7 @@ router.get("/admin-list", requireAdmin, (req, res) => {
 });
 
 router.post("/verify", (req, res) => {
-    const customerId = req.session.pendingCustomer && req.session.pendingCustomer.id;
-    const { channel, code } = req.body;
-    if (!customerId || !["phone", "email"].includes(channel) || !/^\d{6}$/.test(String(code || ""))) return res.status(400).json({ success: false, message: "Enter the six-digit verification code." });
-    const record = db.prepare("SELECT * FROM verification_codes WHERE customer_id = ? AND channel = ? AND expires_at > datetime('now') ORDER BY id DESC LIMIT 1").get(customerId, channel);
-    const hash = require("crypto").createHash("sha256").update(String(code)).digest("hex");
-    if (!record || record.code_hash !== hash) return res.status(400).json({ success: false, message: "That code is invalid or expired." });
-    db.prepare(`UPDATE customers SET ${channel}_verified = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(customerId);
-    db.prepare("DELETE FROM verification_codes WHERE id = ?").run(record.id);
-    const customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId);
-    if (customer.phone_verified || customer.email_verified) { req.session.customer = publicCustomer(customer); delete req.session.pendingCustomer; }
-    res.json({ success: true, verified: Boolean(req.session.customer), user: req.session.customer || null });
+    res.status(410).json({ success: false, message: "Account verification codes are disabled. Log in with your email or phone and password." });
 });
 
 router.post("/forgot-password", async (req, res) => {
